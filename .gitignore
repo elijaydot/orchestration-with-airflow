@@ -5,3 +5,4 @@ config/
 logs/
 plugins/
 data/
+orchestration-with-airflow.code-workspace

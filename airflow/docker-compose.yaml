@@ -46,11 +46,10 @@
 ---
 x-airflow-common:
   &airflow-common
-  # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
-  # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
-  # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  # image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.2}
-  build: .
+  # Use the official Airflow 3 image for the SDK and standard operators in first-dag.py.
+  # No custom build is needed because this project has no Dockerfile or extra dependencies.
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.2}
+  # Load the existing .env beside this Compose file unless ENV_FILE_PATH overrides it.
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment:
@@ -60,11 +59,20 @@ x-airflow-common:
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
+    # Fail configuration validation if the encryption key is missing or empty.
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env}
+    # Keep new DAGs paused; first_dag uses schedule=None and must be unpaused and triggered manually.
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
+    # Show project DAGs rather than the bundled example workflows.
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    # Containers communicate on port 8080; host port 8081 does not change this URL.
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-airflow_jwt_secret}
+    # Allow slow local API responses without timing out task startup.
+    AIRFLOW__WORKERS__EXECUTION_API_TIMEOUT: '60'
+    # Limit task processes for this small local-development workload.
+    AIRFLOW__CELERY__WORKER_CONCURRENCY: '2'
+    # All Airflow services must share the signing secret from the untracked .env.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?Set AIRFLOW__API_AUTH__JWT_SECRET in .env}
     AIRFLOW__API_AUTH__JWT_ISSUER: ${AIRFLOW__API_AUTH__JWT_ISSUER:-airflow}
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
@@ -77,6 +85,7 @@ x-airflow-common:
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
+    # Mount the existing DAG directory; oop.py has no DAG and will not appear as a workflow.
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
@@ -103,7 +112,7 @@ services:
       interval: 10s
       retries: 5
       start_period: 5s
-    restart: always
+    restart: no
 
   redis:
     # Redis is limited to 7.2-bookworm due to licencing change
@@ -117,20 +126,22 @@ services:
       timeout: 30s
       retries: 50
       start_period: 30s
-    restart: always
+    restart: no
 
   airflow-apiserver:
     <<: *airflow-common
     command: api-server
     ports:
-      - "8080:8080"
+      # Expose the UI on this PC at localhost:8081, without publishing it to the LAN.
+      - "127.0.0.1:8081:8080"
     healthcheck:
+      # This check runs inside the container, where the API still listens on port 8080.
       test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
-    restart: always
+      start_period: 180s
+    restart: no
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -140,12 +151,12 @@ services:
     <<: *airflow-common
     command: scheduler
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
-    restart: always
+      start_period: 180s
+    restart: no
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -155,12 +166,13 @@ services:
     <<: *airflow-common
     command: dag-processor
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
+      # exec prevents timed-out checks from leaving Python child processes behind.
+      test: ["CMD-SHELL", 'exec airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 120s
+      timeout: 120s
       retries: 5
-      start_period: 30s
-    restart: always
+      start_period: 180s
+    restart: no
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -171,17 +183,17 @@ services:
     command: celery worker
     healthcheck:
       # yamllint disable rule:line-length
-      test: ["CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", 'exec celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
+      interval: 120s
+      timeout: 120s
       retries: 5
-      start_period: 30s
+      start_period: 180s
     environment:
       <<: *airflow-common-env
       # Required to handle warm shutdown of the celery workers properly
       # See https://airflow.apache.org/docs/docker-stack/entrypoint.html#signal-propagation
       DUMB_INIT_SETSID: "0"
-    restart: always
+    restart: no
     depends_on:
       <<: *airflow-common-depends-on
       airflow-apiserver:
@@ -193,12 +205,12 @@ services:
     <<: *airflow-common
     command: triggerer
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
+      test: ["CMD-SHELL", 'exec airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 120s
+      timeout: 120s
       retries: 5
-      start_period: 30s
-    restart: always
+      start_period: 180s
+    restart: no
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
@@ -327,7 +339,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-    restart: always
+    restart: no
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
