@@ -39,7 +39,7 @@ with DAG(
                 FROM raw_sales
                     """
                 ],
-                conn_id="supabse_conn"        
+                conn_id="Superbase_Postgres_Conn"        
             )
 
     notify_orders = PythonOperator(

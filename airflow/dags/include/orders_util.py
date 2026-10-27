@@ -1,11 +1,14 @@
 import pandas as pd
 from sqlalchemy import create_engine
 from datetime import date
+from pathlib import Path
 from include import config
 
 
 def extract():
     print("Extracting data from source")
+    # pandas creates the CSV file, but not its parent directory.
+    Path(config.DATA_PATH).mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(config.DATA_SOURCE)
     df.to_csv(f"{config.DATA_PATH}/raw_sales.csv", index=False)
     print("Source data extracted successfully")
