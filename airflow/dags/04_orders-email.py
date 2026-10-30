@@ -32,7 +32,7 @@ with DAG(
     transform_orders = SQLExecuteQueryOperator(
                 task_id="transform_orders",
                 sql="sql/orders.sql",
-                conn_id="supabse_conn"
+                conn_id="Superbase_Postgres_Conn"
             )
 
     generate_report = PythonOperator(
@@ -42,7 +42,7 @@ with DAG(
 
     send_report = EmailOperator(
         task_id="send_report",
-        to=["nihikah175@hiringview.com", "nmajuuche@gmail.com", "olashileayomi23@gmail.com"],
+        to=["rasika3419@playfine.com", "pranadot@gmail.com", "dotun32@hotmail.com"],
         subject="CDEBite's Daily Orders Report for {{ ds }}",
         html_content="""
         <p>Hi Amara,</p>
@@ -53,16 +53,16 @@ with DAG(
         <p>This report is generated from the {{ var.value.get("environment") }} environment</p>
         <p>
         Best Regards <br>
-        Najeeb Sulaiman
+        Elijah Aremu
         </p>
         """,
-        conn_id="email_conn"
+        conn_id="orders_email_conn"
 
     )
 
     alert_no_record = EmailOperator(
             task_id="alert_no_record",
-            to=["nihikah175@hiringview.com", "nmajuuche@gmail.com", "olashileayomi23@gmail.com"],
+            to=["rasika3419@playfine.com", "pranadot@gmail.com", "dotun32@hotmail.com"],
             subject="CDEBite's Daily Orders Report for {{ ds }}",
             html_content="""
             <p>Hi Amara,</p>
@@ -70,10 +70,10 @@ with DAG(
             <p>This report is generated from the {{ var.value.get("environment") }} environment</p>
             <p>
             Best Regards <br>
-            Najeeb Sulaiman
+            Elijah Aremu
             </p>
             """,
-            conn_id="email_conn"
+            conn_id="orders_email_conn"
     
         )
 
